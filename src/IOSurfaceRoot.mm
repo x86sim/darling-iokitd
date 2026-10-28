@@ -27,7 +27,18 @@
 
 IOSurfaceRoot::IOSurfaceRoot()
 {
-	m_display = eglGetDisplay(IODisplayConnectX11::getDisplay());
+	// x86Code: without an X display, eglGetDisplay(NULL) means EGL_DEFAULT_DISPLAY and
+	// some drivers (NVIDIA) then pick Wayland and crash in a container with no usable
+	// compositor, taking iokitd (and all IOKit services) down. Run without IOSurface GL.
+	void* xdisplay = IODisplayConnectX11::getDisplay();
+	if (xdisplay == NULL)
+	{
+		m_display = EGL_NO_DISPLAY;
+		return;
+	}
+	// Name the platform: eglGetDisplay() makes the driver guess it from the pointer,
+	// and NVIDIA's guesses Wayland for an X display (then crashes in libwayland).
+	m_display = eglGetPlatformDisplay(0x31D5 /* EGL_PLATFORM_X11_KHR */, xdisplay, NULL);
 
     if (m_display == EGL_NO_DISPLAY)
         return;

@@ -637,22 +637,14 @@ kern_return_t is_io_server_version
 	uint64_t *version
 )
 {
-    STUB();
-    return KERN_NOT_SUPPORTED;
+	// x86Code: report XNU's version so IOKitLib uses the *_bin routines (implemented);
+	// otherwise it falls back to the XML-string ones
+	*version = 20190926; // IOKIT_SERVER_VERSION
+	return KERN_SUCCESS;
 }
 
 
-kern_return_t is_io_service_get_matching_service_bin
-(
-	mach_port_t master_port,
-	io_struct_inband_t matching,
-	mach_msg_type_number_t matchingCnt,
-	mach_port_t *service
-)
-{
-    STUB();
-    return KERN_NOT_SUPPORTED;
-}
+// is_io_service_get_matching_service_bin: ServiceRegistry.mm (x86Code)
 
 kern_return_t is_io_service_match_property_table_bin
 (

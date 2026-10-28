@@ -108,6 +108,32 @@ kern_return_t is_io_service_get_matching_services_bin
 	}
 }
 
+// x86Code: the first matching service (IOServiceGetMatchingService)
+kern_return_t is_io_service_get_matching_service_bin
+(
+	mach_port_t master_port,
+	io_struct_inband_t matching,
+	mach_msg_type_number_t matchingCnt,
+	mach_port_t *service
+)
+{
+	mach_port_t iteratorPort = MACH_PORT_NULL;
+	kern_return_t kr = is_io_service_get_matching_services_bin(master_port, matching, matchingCnt, &iteratorPort);
+
+	*service = MACH_PORT_NULL;
+	if (kr != kIOReturnSuccess)
+		return kr;
+
+	IOIterator* iter = dynamic_cast<IOIterator*>(IOObject::lookup(iteratorPort));
+	if (iter != nullptr)
+	{
+		IOObject* first = iter->next();
+		if (first != nullptr)
+			*service = first->port();
+	}
+	return kIOReturnSuccess;
+}
+
 kern_return_t is_io_service_get_matching_services
 (
 	mach_port_t master_port,
