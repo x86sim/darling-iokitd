@@ -28,20 +28,6 @@
 #include <stdint.h>
 #include <dispatch/dispatch.h>
 
-// Try to get the right (generic) type definitions.
-// In particular, we really want EGLNativeDisplayType to be void *,
-// not int as it is if __APPLE__ is defined.
-#undef APPLE
-#undef __APPLE__
-
-#define __unix__
-#define EGL_NO_X11
-
-#include <EGL/egl.h>
-
-#define APPLE
-#define __APPLE__
-
 class IOSurface;
 
 class IOSurfaceRoot : public IOUserClient
@@ -70,8 +56,6 @@ private:
 	void callerDied(pid_t pid);
 protected:
 	void surfaceDestroyed(IOSurfaceID myId);
-	EGLDisplay display() { return m_display; }
-	bool hasDisplay() const { return m_display != EGL_NO_DISPLAY; }
 private:
 	struct SurfaceMapping
 	{
@@ -89,8 +73,6 @@ private:
 	std::unordered_map<pid_t, RegisteredProcess> m_processes;
 	std::unordered_map<IOSurfaceID, IOSurface*> m_surfaces;
 	IOSurfaceID m_nextSurfaceID = 1;
-
-	EGLDisplay m_display;
 
 	friend class IOSurface;
 };

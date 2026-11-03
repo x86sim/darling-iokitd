@@ -20,48 +20,19 @@
 #import <Foundation/NSString.h>
 #include "iokitd.h"
 #include "IOSurface.h"
-#include "IODisplayConnectX11.h"
 #include <IOKit/IOCFUnserialize.h>
 #include <stdexcept>
 #include <iostream>
 
+// x86Code: no EGL/GL here. The surfaces are plain shared memory (IOSurface.mm's GL texture path is
+// compiled out), and an EGL display on the host X server made glvnd load the whole GPU driver (NVIDIA:
+// libEGL_nvidia/libGLX_nvidia/libnvidia-*, ~85 MB PSS) into every phone's iokitd for nothing.
 IOSurfaceRoot::IOSurfaceRoot()
 {
-	// x86Code: without an X display, eglGetDisplay(NULL) means EGL_DEFAULT_DISPLAY and
-	// some drivers (NVIDIA) then pick Wayland and crash in a container with no usable
-	// compositor, taking iokitd (and all IOKit services) down. Run without IOSurface GL.
-	void* xdisplay = IODisplayConnectX11::getDisplay();
-	if (xdisplay == NULL)
-	{
-		m_display = EGL_NO_DISPLAY;
-		return;
-	}
-	// Name the platform: eglGetDisplay() makes the driver guess it from the pointer,
-	// and NVIDIA's guesses Wayland for an X display (then crashes in libwayland).
-	m_display = eglGetPlatformDisplay(0x31D5 /* EGL_PLATFORM_X11_KHR */, xdisplay, NULL);
-
-    if (m_display == EGL_NO_DISPLAY)
-        return;
-
-	EGLConfig config;
-	int num_config;
-
-	EGLint const attribute_list[] = {
-		EGL_RED_SIZE, 1,
-		EGL_GREEN_SIZE, 1,
-		EGL_BLUE_SIZE, 1,
-		EGL_NONE
-	};
-
-    eglInitialize(m_display, NULL, NULL);
-    eglChooseConfig(m_display, attribute_list, &config, 1, &num_config);
-
-    eglBindAPI(EGL_OPENGL_API);
 }
 
 IOSurfaceRoot::~IOSurfaceRoot()
 {
-	eglTerminate(m_display);
 }
 
 IOSurfaceRoot* IOSurfaceRoot::instance()
@@ -162,9 +133,6 @@ IOExternalMethod *IOSurfaceRoot::getExternalMethodForIndex(UInt32 index)
 
 IOReturn IOSurfaceRoot::createSurface(const void* inputData, void* outputData, IOByteCount inputCount, IOByteCount* outputCount)
 {
-	if (!hasDisplay())
-		return KERN_FAILURE;
-		
 	CFStringRef errorString;
 	CFTypeRef cf = IOCFUnserializeBinary(static_cast<const char*>(inputData), inputCount, nullptr, 0, &errorString);
 

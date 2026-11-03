@@ -21,6 +21,15 @@ include_directories(BEFORE ${CMAKE_CURRENT_BINARY_DIR})
 mig(iokitmig.defs)
 mig(powermanagement.defs)
 
+# x86Code: every out-of-line reply buffer (io_registry_entry_get_properties*, ...) is a fresh vm_allocate()
+# here; the xnu defs say nothing about deallocating it because the kernel's copyout consumes it. As a user-space
+# server, iokitd has to send it with deallocate = TRUE or each reply leaks its pages (backboardd/SpringBoard/
+# UIKit ask for registry properties all the time: ~35-50 MB of anon in every phone's iokitd after a boot).
+add_custom_command(OUTPUT ${CMAKE_CURRENT_BINARY_DIR}/iokitmigServerDealloc.c
+	COMMAND sed "s/deallocate =  FALSE/deallocate = TRUE/"
+		${CMAKE_CURRENT_BINARY_DIR}/iokitmigServer.c > ${CMAKE_CURRENT_BINARY_DIR}/iokitmigServerDealloc.c
+	DEPENDS ${CMAKE_CURRENT_BINARY_DIR}/iokitmigServer.c VERBATIM)
+
 set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -std=c++17")
 
 set(iokitd_sources
@@ -41,14 +50,14 @@ set(iokitd_sources
 	src/IOSurface.mm
 	src/IOUserClient.mm
 	src/IOUserClientApple.mm
-	${CMAKE_CURRENT_BINARY_DIR}/iokitmigServer.c
+	${CMAKE_CURRENT_BINARY_DIR}/iokitmigServerDealloc.c
 	${CMAKE_CURRENT_BINARY_DIR}/powermanagementServer.c
 	${CMAKE_CURRENT_SOURCE_DIR}/../IOKitUser/IOCFSerialize.c
 	${CMAKE_CURRENT_SOURCE_DIR}/../IOKitUser/IOCFUnserialize.tab.c
 )
 
 add_darling_executable(iokitd ${iokitd_sources})
-target_link_libraries(iokitd cxx bsm.0 CoreFoundation Foundation X11 XRandR Xext EGL GL IOSurface)
+target_link_libraries(iokitd cxx bsm.0 CoreFoundation Foundation X11 XRandR Xext IOSurface)
 
 install(TARGETS iokitd DESTINATION libexec/darling/usr/sbin)
 install(FILES org.darlinghq.iokitd.plist DESTINATION libexec/darling/System/Library/LaunchDaemons)
