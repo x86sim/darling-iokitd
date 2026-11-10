@@ -22,7 +22,9 @@
 #import <Foundation/NSData.h>
 #import <Foundation/NSDictionary.h>
 #include <IOKit/IOKitKeys.h>
-#include <darling/emulation/linux_premigration/ext/for-platform-identity.h>
+// x86Sim: darlingserver has no platform identity call (upstream's get_platform_identity RPC is not merged):
+// no serial number, product name or board id are published
+typedef struct { char serial_number[64]; char product_name[64]; char board_id[64]; } dserver_platform_identity_t;
 #include <os/log.h>
 #include <sys/sysctl.h>
 #include <uuid/uuid.h>
@@ -55,13 +57,7 @@ static NSDictionary* platformProperties()
 {
 	NSMutableDictionary* properties = [NSMutableDictionary dictionary];
 	dserver_platform_identity_t identity;
-	int error = __darling_get_platform_identity(&identity);
-
-	if (error != 0)
-	{
-		os_log_error(OS_LOG_DEFAULT, "iokitd: cannot read the platform identity: %{public}s", strerror(error));
-		memset(&identity, 0, sizeof(identity));
-	}
+	memset(&identity, 0, sizeof(identity));
 
 	properties[@"manufacturer"] = deviceTreeString("Apple Inc.");
 
