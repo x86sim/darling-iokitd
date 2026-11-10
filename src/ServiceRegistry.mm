@@ -108,7 +108,7 @@ kern_return_t is_io_service_get_matching_services_bin
 	}
 }
 
-// x86Code: the first matching service (IOServiceGetMatchingService)
+// x86Sim: the first matching service (IOServiceGetMatchingService)
 kern_return_t is_io_service_get_matching_service_bin
 (
 	mach_port_t master_port,

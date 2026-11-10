@@ -39,7 +39,7 @@ bool IOService::matches(NSDictionary* dict)
 		NSObject* ourProp = ourProps[key];
 		NSObject* expectedValue = dict[key];
 
-		// x86Code: as in XNU, IOProviderClass also names the service's own class
+		// x86Sim: as in XNU, IOProviderClass also names the service's own class
 		// (IOServiceMatching("IOSurfaceRoot") is {IOProviderClass = IOSurfaceRoot})
 		if ([key isEqualToString: @"IOProviderClass"] && ([expectedValue isEqual: ourProps[@"IOClass"]]
 			|| [expectedValue isEqual: [NSString stringWithUTF8String: className()]]))

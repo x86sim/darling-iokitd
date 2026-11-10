@@ -21,7 +21,7 @@ include_directories(BEFORE ${CMAKE_CURRENT_BINARY_DIR})
 mig(iokitmig.defs)
 mig(powermanagement.defs)
 
-# x86Code: every out-of-line reply buffer (io_registry_entry_get_properties*, ...) is a fresh vm_allocate()
+# x86Sim: every out-of-line reply buffer (io_registry_entry_get_properties*, ...) is a fresh vm_allocate()
 # here; the xnu defs say nothing about deallocating it because the kernel's copyout consumes it. As a user-space
 # server, iokitd has to send it with deallocate = TRUE or each reply leaks its pages (backboardd/SpringBoard/
 # UIKit ask for registry properties all the time: ~35-50 MB of anon in every phone's iokitd after a boot).

@@ -637,14 +637,14 @@ kern_return_t is_io_server_version
 	uint64_t *version
 )
 {
-	// x86Code: report XNU's version so IOKitLib uses the *_bin routines (implemented);
+	// x86Sim: report XNU's version so IOKitLib uses the *_bin routines (implemented);
 	// otherwise it falls back to the XML-string ones
 	*version = 20190926; // IOKIT_SERVER_VERSION
 	return KERN_SUCCESS;
 }
 
 
-// is_io_service_get_matching_service_bin: ServiceRegistry.mm (x86Code)
+// is_io_service_get_matching_service_bin: ServiceRegistry.mm (x86Sim)
 
 kern_return_t is_io_service_match_property_table_bin
 (

@@ -24,7 +24,7 @@
 #include <stdexcept>
 #include <iostream>
 
-// x86Code: no EGL/GL here. The surfaces are plain shared memory (IOSurface.mm's GL texture path is
+// x86Sim: no EGL/GL here. The surfaces are plain shared memory (IOSurface.mm's GL texture path is
 // compiled out), and an EGL display on the host X server made glvnd load the whole GPU driver (NVIDIA:
 // libEGL_nvidia/libGLX_nvidia/libnvidia-*, ~85 MB PSS) into every phone's iokitd for nothing.
 IOSurfaceRoot::IOSurfaceRoot()
