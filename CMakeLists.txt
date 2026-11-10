@@ -17,6 +17,13 @@ include_directories(
 	${X11_Xrandr_INCLUDE_PATH}
 )
 include_directories(BEFORE ${CMAKE_CURRENT_BINARY_DIR})
+# dserver_platform_identity_t, used by libsystem_kernel's __darling_get_platform_identity
+include_directories(${CMAKE_SOURCE_DIR}/src/external/darlingserver/include)
+
+# The host's libdbus-1, used through the dbus wrapper library
+find_package(PkgConfig REQUIRED)
+pkg_check_modules(PC_DBUS REQUIRED dbus-1)
+include_directories(${PC_DBUS_INCLUDE_DIRS})
 
 mig(iokitmig.defs)
 mig(powermanagement.defs)
@@ -45,11 +52,18 @@ set(iokitd_sources
 	src/IODisplayConnect.mm
 	src/IODisplayConnectX11.mm
 	src/PowerAssertions.mm
+	src/PowerSources.mm
 	src/PowerAssertionsX11.mm
+	src/IOPMrootDomain.mm
+	src/HostBus.c
+	src/HostPowerInhibit.c
+	src/LogindSleep.c
 	src/IOSurfaceRoot.mm
 	src/IOSurface.mm
 	src/IOUserClient.mm
+	src/IOInterestNotification.mm
 	src/IOUserClientApple.mm
+	src/IOPlatformExpertDevice.mm
 	${CMAKE_CURRENT_BINARY_DIR}/iokitmigServerDealloc.c
 	${CMAKE_CURRENT_BINARY_DIR}/powermanagementServer.c
 	${CMAKE_CURRENT_SOURCE_DIR}/../IOKitUser/IOCFSerialize.c
@@ -57,7 +71,7 @@ set(iokitd_sources
 )
 
 add_darling_executable(iokitd ${iokitd_sources})
-target_link_libraries(iokitd cxx bsm.0 CoreFoundation Foundation X11 XRandR Xext IOSurface)
+target_link_libraries(iokitd cxx bsm.0 CoreFoundation Foundation X11 XRandR Xext IOSurface dbus)
 
 install(TARGETS iokitd DESTINATION libexec/darling/usr/sbin)
 install(FILES org.darlinghq.iokitd.plist DESTINATION libexec/darling/System/Library/LaunchDaemons)

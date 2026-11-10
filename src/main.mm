@@ -32,6 +32,8 @@
 #include "IODisplayConnectX11.h"
 #include "PowerAssertions.h"
 #include "IOSurfaceRoot.h"
+#include "IOPlatformExpertDevice.h"
+#include "IOPMrootDomain.h"
 
 extern "C" {
 #include "iokitmigServer.h"
@@ -39,7 +41,7 @@ extern "C" {
 }
 
 static const char* SERVICE_NAME = "org.darlinghq.iokitd";
-mach_port_t g_masterPort, g_deathPort, g_powerManagementPort;
+mach_port_t g_masterPort, g_powerManagementPort;
 
 static void discoverAllDevices();
 static boolean_t iokitSaveAuditTrail(mach_msg_header_t *message, mach_msg_header_t *reply);
@@ -73,13 +75,6 @@ int main(int argc, const char** argv)
 		kern_return_t kr = __darling_set_io_master_port(g_masterPort);
 		if (kr != KERN_SUCCESS)
 			os_log_error(OS_LOG_DEFAULT, "setting the host IO master port failed: %d", kr);
-	}
-
-	ret = mach_port_allocate(mach_task_self(), MACH_PORT_RIGHT_RECEIVE, &g_deathPort);
-	if (ret != KERN_SUCCESS)
-	{
-		os_log_error(OS_LOG_DEFAULT, "%d failed to allocate notification port: %d", getpid(), ret);
-		return 1;
 	}
 
 	// Build IOKit registry here
@@ -118,24 +113,10 @@ int main(int argc, const char** argv)
 		dispatch_mig_server(pwrMgmtPortSource, _powermanagement_subsystem.maxsize, powermanagement_server); // FIXME
 	});
 
-	////////////////////////////////
-	// unused port notifications  //
-	////////////////////////////////
-	dispatch_source_t deathSource = dispatch_source_create(DISPATCH_SOURCE_TYPE_MACH_RECV, g_deathPort, 0, queue);
-
-	if (!deathSource)
-	{
-		os_log_error(OS_LOG_DEFAULT, "%d dispatch_source_create() failed for notification port", getpid());
-		return 1;
-	}
-
-	dispatch_source_set_event_handler(deathSource, ^{
-		dispatch_mig_server(deathSource, sizeof(mach_no_senders_notification_t), IOObject::deathNotify);
-	});
-
 	dispatch_resume(portSource);
-	dispatch_resume(deathSource);
 	dispatch_resume(pwrMgmtPortSource);
+
+	IOPMrootDomain::instance()->startHostSleepMonitor();
 
 	os_log(OS_LOG_DEFAULT, "iokitd up and running.");
 
@@ -166,6 +147,8 @@ static void discoverAllDevices()
 	ServiceRegistry* registry = ServiceRegistry::instance();
 	// Trick to make sure the root object gets instantiated first and gets the lowest ID
 	IORegistryEntry::root();
+	IOPlatformExpertDevice::registerSelf(registry);
 	IODisplayConnectX11::discoverDevices(registry);
 	IOSurfaceRoot::registerSelf(registry);
+	IOPMrootDomain::registerSelf(registry);
 }
