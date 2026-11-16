@@ -27,6 +27,9 @@
 #include <cstring>
 #include <vector>
 #include "IOIterator.h"
+#include "IOServiceNotification.h"
+#include "NotificationRequests.h"
+#include <algorithm>
 
 extern "C" {
 #include "iokitmigServer.h"
@@ -38,7 +41,7 @@ ServiceRegistry* ServiceRegistry::instance()
 	return &reg;
 }
 
-IOIterator* ServiceRegistry::iteratorForMatchingServices(NSDictionary* criteria) const
+std::vector<IOObject*> ServiceRegistry::matchingServices(NSDictionary* criteria) const
 {
 	std::vector<IOObject*> matching;
 
@@ -48,7 +51,12 @@ IOIterator* ServiceRegistry::iteratorForMatchingServices(NSDictionary* criteria)
 			matching.push_back(*it);
 	}
 
-	return new IOIterator(matching);
+	return matching;
+}
+
+IOIterator* ServiceRegistry::iteratorForMatchingServices(NSDictionary* criteria) const
+{
+	return new IOIterator(matchingServices(criteria));
 }
 
 IOService* ServiceRegistry::firstMatchingService(NSDictionary* criteria) const
@@ -64,6 +72,40 @@ IOService* ServiceRegistry::firstMatchingService(NSDictionary* criteria) const
 void ServiceRegistry::registerService(IOService* service)
 {
 	m_registeredServices.push_back(service);
+
+	// A notification may be destroyed by its client at any time, but only on
+	// this queue, so the list cannot change while it is walked
+	for (IOServiceNotification* notification : m_notifications)
+	{
+		if (notification->kind() != IOServiceNotification::Terminate)
+			notification->serviceEvent(service);
+	}
+}
+
+void ServiceRegistry::unregisterService(IOService* service)
+{
+	auto it = std::find(m_registeredServices.begin(), m_registeredServices.end(), service);
+	if (it == m_registeredServices.end())
+		return;
+	m_registeredServices.erase(it);
+
+	for (IOServiceNotification* notification : m_notifications)
+	{
+		if (notification->kind() == IOServiceNotification::Terminate)
+			notification->serviceEvent(service);
+		else
+			notification->remove(service);
+	}
+}
+
+void ServiceRegistry::addNotification(IOServiceNotification* notification)
+{
+	m_notifications.push_back(notification);
+}
+
+void ServiceRegistry::removeNotification(IOServiceNotification* notification)
+{
+	m_notifications.remove(notification);
 }
 
 kern_return_t is_io_service_get_matching_services_ool
@@ -81,7 +123,7 @@ kern_return_t is_io_service_get_matching_services_ool
 
 // Unserializes the binary matching dictionary of a request. The caller
 // releases the result.
-static NSDictionary* unserializeMatching(io_struct_inband_t matching, mach_msg_type_number_t matchingCnt)
+static NSDictionary* unserializeMatching(const char* matching, mach_msg_type_number_t matchingCnt)
 {
 	CFStringRef errorString = nullptr;
 	CFTypeRef criteria = IOCFUnserializeBinary(matching, matchingCnt, nullptr, 0, &errorString);
@@ -153,6 +195,54 @@ kern_return_t is_io_service_get_matching_service_bin
 	return kIOReturnSuccess;
 }
 
+kern_return_t iokitAddServiceNotification
+(
+	const char* notification_type,
+	const char* matching,
+	mach_msg_type_number_t matchingCnt,
+	mach_port_t wake_port,
+	const void* reference,
+	size_t referenceSize,
+	bool client64,
+	mach_port_t *notification
+)
+{
+	*notification = MACH_PORT_NULL;
+
+	NSDictionary* criteria = unserializeMatching(matching, matchingCnt);
+	if (!criteria)
+		return kIOReturnBadArgument;
+
+	// The notification is an iterator over the services that match: the ones
+	// registered now (for publish and match notifications, which is what the
+	// client walks to arm it), and the ones that come or go later, announced
+	// on the wake port. Termination notifications start empty.
+	IOServiceNotification::Kind kind;
+	if (!strcmp(notification_type, kIOPublishNotification) ||
+		!strcmp(notification_type, kIOFirstPublishNotification))
+		kind = IOServiceNotification::Publish;
+	else if (!strcmp(notification_type, kIOMatchedNotification) ||
+		!strcmp(notification_type, kIOFirstMatchNotification))
+		kind = IOServiceNotification::Match;
+	else
+		kind = IOServiceNotification::Terminate;
+
+	// Takes over the criteria and the wake port right
+	IOServiceNotification* iterator = new IOServiceNotification(kind, criteria, wake_port, reference,
+		referenceSize, client64);
+
+	if (kind != IOServiceNotification::Terminate)
+	{
+		for (IOObject* service : ServiceRegistry::instance()->matchingServices(criteria))
+			iterator->append(service);
+	}
+
+	*notification = iterator->port();
+	iterator->releaseLater();
+
+	return kIOReturnSuccess;
+}
+
 kern_return_t is_io_service_add_notification_bin_64
 (
 	mach_port_t master_port,
@@ -165,34 +255,14 @@ kern_return_t is_io_service_add_notification_bin_64
 	mach_port_t *notification
 )
 {
-	*notification = MACH_PORT_NULL;
-
-	NSDictionary* criteria = unserializeMatching(matching, matchingCnt);
-	if (!criteria)
+	if (referenceCnt > kOSAsyncRef64Count)
+	{
+		*notification = MACH_PORT_NULL;
 		return kIOReturnBadArgument;
+	}
 
-	// Services are only registered while iokitd starts, so none is ever
-	// published or terminated later. The notification is an iterator over
-	// the services that match now, which is what the client walks to arm a
-	// publish or match notification; termination notifications start empty.
-	IOIterator* iterator;
-	if (!strcmp(notification_type, kIOPublishNotification) ||
-		!strcmp(notification_type, kIOFirstPublishNotification) ||
-		!strcmp(notification_type, kIOMatchedNotification) ||
-		!strcmp(notification_type, kIOFirstMatchNotification))
-		iterator = ServiceRegistry::instance()->iteratorForMatchingServices(criteria);
-	else
-		iterator = new IOIterator(std::vector<IOObject*>());
-	CFRelease(criteria);
-
-	// Nothing is ever sent to the wake port
-	if (MACH_PORT_VALID(wake_port))
-		mach_port_deallocate(mach_task_self(), wake_port);
-
-	*notification = iterator->port();
-	iterator->releaseLater();
-
-	return kIOReturnSuccess;
+	return iokitAddServiceNotification(notification_type, matching, matchingCnt, wake_port,
+		reference, referenceCnt * sizeof(io_user_reference_t), true, notification);
 }
 
 kern_return_t is_io_service_get_matching_services

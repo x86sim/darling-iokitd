@@ -30,13 +30,17 @@
 #include "iokitmig.h"
 #include "IOObject.h"
 #include "IODisplayConnectX11.h"
+#include "IODisplayConnectDRM.h"
+#include "IOHostGPU.h"
 #include "PowerAssertions.h"
 #include "IOSurfaceRoot.h"
 #include "IOPlatformExpertDevice.h"
 #include "IOPMrootDomain.h"
+#include "HostInputMonitor.h"
 
 extern "C" {
 #include "iokitmigServer.h"
+#include "iokitDispatch.h"
 #include "powermanagementServer.h"
 }
 
@@ -44,7 +48,6 @@ static const char* SERVICE_NAME = "org.darlinghq.iokitd";
 mach_port_t g_masterPort, g_powerManagementPort;
 
 static void discoverAllDevices();
-static boolean_t iokitSaveAuditTrail(mach_msg_header_t *message, mach_msg_header_t *reply);
 
 extern "C" kern_return_t __darling_set_io_master_port(mach_port_t port); // x86Sim, libsystem_kernel
 
@@ -117,29 +120,12 @@ int main(int argc, const char** argv)
 	dispatch_resume(pwrMgmtPortSource);
 
 	IOPMrootDomain::instance()->startHostSleepMonitor();
+	HostInputMonitor::start(ServiceRegistry::instance());
 
 	os_log(OS_LOG_DEFAULT, "iokitd up and running.");
 
 	dispatch_main();
 	return 0;
-}
-
-static boolean_t iokitSaveAuditTrail(mach_msg_header_t *message, mach_msg_header_t *reply)
-{
-	const mach_msg_context_trailer_t* trailer = reinterpret_cast<mach_msg_context_trailer_t*>(reinterpret_cast<char*>(message) + message->msgh_size);
-	audit_token_to_au32(trailer->msgh_audit, nullptr, nullptr, nullptr, nullptr, nullptr, &g_iokitCurrentCallerPID, nullptr, nullptr);
-	boolean_t handled = iokit_server(message, reply);
-	// x86Sim: trace requests (debugging the iOS simulator's IOKit)
-	{
-		FILE* f = fopen("/private/tmp/x86sim-iokitd.log", "a");
-		if (f)
-		{
-			fprintf(f, "msg id %d handled %d ret %d\n", message->msgh_id, handled,
-				((mig_reply_error_t*) reply)->RetCode);
-			fclose(f);
-		}
-	}
-	return handled;
 }
 
 static void discoverAllDevices()
@@ -148,7 +134,12 @@ static void discoverAllDevices()
 	// Trick to make sure the root object gets instantiated first and gets the lowest ID
 	IORegistryEntry::root();
 	IOPlatformExpertDevice::registerSelf(registry);
-	IODisplayConnectX11::discoverDevices(registry);
+	// The connectors of the host's DRM devices are the primary source of displays. XRandR
+	// outputs are published only if DRM shows none (Xvfb, a nested or remote X server), so
+	// that a display is never published twice.
+	size_t drmDisplays = IODisplayConnectDRM::discoverDevices(registry);
+	IODisplayConnectX11::discoverDevices(registry, drmDisplays == 0);
+	IOHostGPU::registerSelf(registry);
 	IOSurfaceRoot::registerSelf(registry);
 	IOPMrootDomain::registerSelf(registry);
 }

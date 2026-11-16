@@ -17,6 +17,8 @@ include_directories(
 	${X11_Xrandr_INCLUDE_PATH}
 )
 include_directories(BEFORE ${CMAKE_CURRENT_BINARY_DIR})
+# iokit32_types.h, imported by the generated 32-bit server
+include_directories(${CMAKE_CURRENT_SOURCE_DIR}/src)
 # dserver_platform_identity_t, used by libsystem_kernel's __darling_get_platform_identity
 include_directories(${CMAKE_SOURCE_DIR}/src/external/darlingserver/include)
 
@@ -26,6 +28,11 @@ pkg_check_modules(PC_DBUS REQUIRED dbus-1)
 include_directories(${PC_DBUS_INCLUDE_DIRS})
 
 mig(iokitmig.defs)
+# Requests of 32-bit clients (shares its message ids with iokitmig.defs, so no
+# second xtrace library)
+set(MIG_NO_XTRACE 1)
+mig(iokitmig32.defs)
+unset(MIG_NO_XTRACE)
 mig(powermanagement.defs)
 
 # x86Sim: every out-of-line reply buffer (io_registry_entry_get_properties*, ...) is a fresh vm_allocate()
@@ -36,6 +43,10 @@ add_custom_command(OUTPUT ${CMAKE_CURRENT_BINARY_DIR}/iokitmigServerDealloc.c
 	COMMAND sed "s/deallocate =  FALSE/deallocate = TRUE/"
 		${CMAKE_CURRENT_BINARY_DIR}/iokitmigServer.c > ${CMAKE_CURRENT_BINARY_DIR}/iokitmigServerDealloc.c
 	DEPENDS ${CMAKE_CURRENT_BINARY_DIR}/iokitmigServer.c VERBATIM)
+add_custom_command(OUTPUT ${CMAKE_CURRENT_BINARY_DIR}/iokitmig32ServerDealloc.c
+	COMMAND sed "s/deallocate =  FALSE/deallocate = TRUE/"
+		${CMAKE_CURRENT_BINARY_DIR}/iokitmig32Server.c > ${CMAKE_CURRENT_BINARY_DIR}/iokitmig32ServerDealloc.c
+	DEPENDS ${CMAKE_CURRENT_BINARY_DIR}/iokitmig32Server.c VERBATIM)
 
 set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -std=c++17")
 
@@ -51,6 +62,8 @@ set(iokitd_sources
 	src/IORegistryEntry.mm
 	src/IODisplayConnect.mm
 	src/IODisplayConnectX11.mm
+	src/IODisplayConnectDRM.mm
+	src/HostDisplay.c
 	src/PowerAssertions.mm
 	src/PowerSources.mm
 	src/PowerAssertionsX11.mm
@@ -64,7 +77,16 @@ set(iokitd_sources
 	src/IOInterestNotification.mm
 	src/IOUserClientApple.mm
 	src/IOPlatformExpertDevice.mm
+	src/IOServiceNotification.mm
+	src/IOHIDGamepadDevice.mm
+	src/IOHIDInputDevice.mm
+	src/HostGamepad.c
+	src/HostInput.c
+	src/HostInputMonitor.mm
+	src/IOHostGPU.mm
 	${CMAKE_CURRENT_BINARY_DIR}/iokitmigServerDealloc.c
+	${CMAKE_CURRENT_BINARY_DIR}/iokitmig32ServerDealloc.c
+	src/iokitDispatch.cpp
 	${CMAKE_CURRENT_BINARY_DIR}/powermanagementServer.c
 	${CMAKE_CURRENT_SOURCE_DIR}/../IOKitUser/IOCFSerialize.c
 	${CMAKE_CURRENT_SOURCE_DIR}/../IOKitUser/IOCFUnserialize.tab.c
