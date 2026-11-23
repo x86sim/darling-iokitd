@@ -18,6 +18,9 @@
 */
 
 #include "IOHIDGamepadDevice.h"
+#include "IOHIDHostIdentity.h"
+#include "IOHIDDeviceMatching.h"
+#include "IOUserClient.h"
 #import <Foundation/NSArray.h>
 #import <Foundation/NSData.h>
 #import <Foundation/NSString.h>
@@ -26,6 +29,8 @@
 #include <os/log.h>
 #include <unistd.h>
 #include <cstdlib>
+#include <cerrno>
+#include <algorithm>
 #include <cstring>
 
 // The values of IOHIDKeys.h
@@ -45,6 +50,14 @@ static NSString* const kKeyReportDescriptor = @"ReportDescriptor";
 static NSString* const kKeyMaxInputReportSize = @"MaxInputReportSize";
 static NSString* const kKeyMaxOutputReportSize = @"MaxOutputReportSize";
 static NSString* const kKeyMaxFeatureReportSize = @"MaxFeatureReportSize";
+static NSString* const kKeyPlugInTypes = @"IOCFPlugInTypes";
+
+// The plug-in that IOHIDDeviceCreate() loads (kIOHIDDeviceTypeID, and the
+// plug-in's path relative to the extensions folder)
+static NSString* const kHIDDeviceTypeID = @"7DDEECA8-A7B4-11DA-8A0E-0014519758EF";
+// The plug-in type of the IOHIDDeviceInterface family (kIOHIDDeviceUserClientTypeID), served by the same plug-in
+static NSString* const kHIDDeviceUserClientTypeID = @"FA12FA38-6F1A-11D4-BA0C-0005028F18D5";
+static NSString* const kHIDLibPlugIn = @"IOHIDFamily.kext/Contents/PlugIns/IOHIDLib.plugin";
 
 static NSString* transportName(uint16_t bustype)
 {
@@ -63,6 +76,7 @@ static NSDictionary* propertiesOf(const struct iokitd_gamepad& pad)
 	int length = iokitd_gamepad_report_descriptor(&pad, descriptor, sizeof(descriptor));
 	NSMutableDictionary* props = [NSMutableDictionary dictionary];
 
+	props[kKeyPlugInTypes] = @{ kHIDDeviceTypeID: kHIDLibPlugIn, kHIDDeviceUserClientTypeID: kHIDLibPlugIn };
 	props[kKeyTransport] = transportName(pad.bustype);
 	props[kKeyVendorID] = @(pad.vendor);
 	props[kKeyProductID] = @(pad.product);
@@ -80,14 +94,167 @@ static NSDictionary* propertiesOf(const struct iokitd_gamepad& pad)
 	props[kKeyDeviceUsagePairs] = @[ @{ kKeyDeviceUsagePage: @1, kKeyDeviceUsage: @(iokitd_gamepad_primary_usage(&pad)) } ];
 	if (length > 0)
 		props[kKeyReportDescriptor] = [NSData dataWithBytes: descriptor length: length];
-	props[kKeyMaxInputReportSize] = @(pad.report_size);
-	props[kKeyMaxOutputReportSize] = @0;
+	props[kKeyMaxInputReportSize] = @(pad.report_size + (pad.input_report_id ? 1 : 0));
+	props[kKeyMaxOutputReportSize] = @(pad.output_kind ? pad.output_size + 1 : 0);
 	props[kKeyMaxFeatureReportSize] = @0;
+	IOHIDApplyHostIdentity(props, pad.path);
 	return props;
 }
 
+// The elements of the report descriptor iokitd generates for the controller
+// (HostGamepad.h): one application collection holding the items of the
+// report in descriptor order (the buttons as one struct of consecutive
+// usages, the hat, the axes), and the handler of the input report. Cookies run from 1 in that order.
+static std::vector<IOHIDElementDescription> elementsOf(const struct iokitd_gamepad& pad)
+{
+	std::vector<IOHIDElementDescription> elements;
+	uint32_t cookie = 1;
+
+	auto add = [&](IOHIDElementDescription e, uint32_t count) {
+		e.wire.cookieMin = cookie;
+		e.wire.cookieMax = cookie + count - 1;
+		cookie += count;
+		elements.push_back(e);
+	};
+
+	IOHIDElementDescription collection = {};
+	collection.wire.type = kIOHIDLibTypeCollection;
+	collection.wire.collectionType = kIOHIDLibCollectionApplication;
+	collection.wire.usagePage = 0x01;
+	collection.wire.usageMin = collection.wire.usageMax = iokitd_gamepad_primary_usage(&pad);
+	add(collection, 1);
+
+	for (int i = 0; i < pad.field_count; i++)
+	{
+		const struct iokitd_gamepad_field& f = pad.fields[i];
+		IOHIDElementDescription e = {};
+
+		e.wire.parentCookie = 1;
+		e.wire.reportID = pad.input_report_id;
+		e.wire.flags = kIOHIDLibFlagsVariable;
+		e.wire.reportCount = e.wire.rawReportCount = 1;
+		e.bitOffset = f.bit_offset;
+
+		if (f.kind == IOKITD_GAMEPAD_FIELD_BUTTONS)
+		{
+			// Usages 1 .. button_bits, one element each, one bit each
+			e.wire.type = kIOHIDLibTypeInputButton;
+			e.wire.usagePage = 0x09;
+			e.wire.usageMin = 1;
+			e.wire.usageMax = pad.button_bits;
+			e.wire.min = e.wire.scaledMin = 0;
+			e.wire.max = e.wire.scaledMax = 1;
+			e.wire.size = e.wire.reportSize = 1;
+			e.wire.reportCount = e.wire.rawReportCount = pad.button_bits;
+			e.wire.bytes = e.wire.valueSize = 1;
+			add(e, pad.button_bits);
+		}
+		else if (f.kind == IOKITD_GAMEPAD_FIELD_HAT)
+		{
+			e.wire.type = kIOHIDLibTypeInputMisc;
+			e.wire.flags |= kIOHIDLibFlagsNullState;
+			e.wire.usagePage = 0x01;
+			e.wire.usageMin = e.wire.usageMax = 0x39;
+			e.wire.min = pad.hat_logical_min;
+			e.wire.max = pad.hat_logical_min + 7;
+			e.wire.scaledMin = 0;
+			e.wire.scaledMax = 315;
+			e.wire.size = e.wire.reportSize = 4;
+			e.wire.unit = 0x14; // degrees
+			e.wire.bytes = e.wire.valueSize = 1;
+			add(e, 1);
+		}
+		else
+		{
+			const struct iokitd_gamepad_axis& axis = pad.axes[f.index];
+
+			e.wire.type = kIOHIDLibTypeInputMisc;
+			e.wire.usagePage = axis.usage_page;
+			e.wire.usageMin = e.wire.usageMax = axis.usage;
+			e.wire.min = e.wire.scaledMin = 0;
+			e.wire.max = e.wire.scaledMax = axis.maximum - axis.minimum;
+			e.wire.size = e.wire.reportSize = axis.bits;
+			e.wire.bytes = e.wire.valueSize = (axis.bits + 7) / 8;
+			add(e, 1);
+		}
+	}
+
+	// The output report: the Physical Interface Device items of an Xbox One controller, or the one
+	// block of vendor-defined bytes of a DualShock 4
+	if (pad.output_kind == IOKITD_GAMEPAD_OUTPUT_XBOX)
+	{
+		IOHIDElementDescription logical = {};
+		logical.wire.type = kIOHIDLibTypeCollection;
+		logical.wire.collectionType = kIOHIDLibCollectionLogical;
+		logical.wire.parentCookie = 1;
+		logical.wire.usagePage = 0x0f;
+		logical.wire.usageMin = logical.wire.usageMax = 0x21;
+		uint32_t logicalCookie = cookie;
+		add(logical, 1);
+
+		struct { uint32_t usage, offset, size, count, max, unit, exponent; } items[] = {
+			{ 0x97, 0, 1, 4, 1, 0, 0 },          // DC Enable Actuators
+			{ 0x70, 8, 8, 4, 100, 0, 0 },        // Magnitude
+			{ 0x50, 40, 8, 1, 255, 0x1001, 0x0e }, // Duration, 10 ms
+			{ 0xa7, 48, 8, 1, 255, 0, 0 },       // Start Delay
+			{ 0x7c, 56, 8, 1, 255, 0, 0 },       // Loop Count
+		};
+		for (const auto& item : items)
+		{
+			IOHIDElementDescription e = {};
+			e.wire.type = kIOHIDLibTypeOutput;
+			e.wire.parentCookie = logicalCookie;
+			e.wire.flags = kIOHIDLibFlagsVariable;
+			e.wire.reportID = pad.output_report_id;
+			e.wire.usagePage = 0x0f;
+			e.wire.usageMin = e.wire.usageMax = item.usage;
+			e.wire.min = e.wire.scaledMin = 0;
+			e.wire.max = e.wire.scaledMax = item.max;
+			e.wire.size = e.wire.reportSize = item.size;
+			e.wire.reportCount = e.wire.rawReportCount = item.count;
+			e.wire.bytes = e.wire.valueSize = (item.size + 7) / 8;
+			e.wire.unit = item.unit;
+			e.wire.unitExponent = item.exponent;
+			e.bitOffset = item.offset;
+			add(e, item.count);
+		}
+	}
+	else if (pad.output_kind == IOKITD_GAMEPAD_OUTPUT_DUALSHOCK)
+	{
+		IOHIDElementDescription e = {};
+		e.wire.type = kIOHIDLibTypeOutput;
+		e.wire.parentCookie = 1;
+		e.wire.flags = kIOHIDLibFlagsVariable;
+		e.wire.reportID = pad.output_report_id;
+		e.wire.usagePage = 0xff00;
+		e.wire.usageMin = e.wire.usageMax = 0x22;
+		e.wire.min = e.wire.scaledMin = 0;
+		e.wire.max = e.wire.scaledMax = 255;
+		e.wire.size = pad.output_size * 8;
+		e.wire.reportSize = 8;
+		e.wire.reportCount = e.wire.rawReportCount = pad.output_size;
+		e.wire.bytes = e.wire.valueSize = pad.output_size;
+		add(e, 1);
+	}
+
+	// The input report as a whole, for clients that want the bytes
+	IOHIDElementDescription report = {};
+	report.reportHandler = true;
+	report.wire.reportID = pad.input_report_id;
+	report.wire.type = kIOHIDLibTypeInputMisc;
+	report.wire.flags = kIOHIDLibFlagsVariable;
+	uint32_t handlerBytes = pad.report_size + (pad.input_report_id ? 1 : 0);
+	report.wire.size = handlerBytes * 8;
+	report.wire.reportSize = 8;
+	report.wire.reportCount = report.wire.rawReportCount = handlerBytes;
+	report.wire.bytes = report.wire.valueSize = handlerBytes;
+	add(report, 1);
+
+	return elements;
+}
+
 IOHIDGamepadDevice::IOHIDGamepadDevice(const struct iokitd_gamepad& pad)
-: m_pad(pad), m_report(pad.report_size, 0), m_properties([propertiesOf(pad) retain])
+: m_pad(pad), m_report(pad.report_size, 0), m_output(pad.output_kind ? pad.output_size : 0, 0), m_elements(elementsOf(pad)), m_properties([propertiesOf(pad) retain])
 {
 }
 
@@ -107,6 +274,15 @@ bool IOHIDGamepadDevice::conformsTo(const char* name)
 	return std::strcmp(name, "IOHIDDevice") == 0 || IOService::conformsTo(name);
 }
 
+bool IOHIDGamepadDevice::matches(NSDictionary* dict)
+{
+	NSDictionary* rest;
+
+	if (!IOHIDMatchUsagePairs(dict, m_properties, &rest))
+		return false;
+	return IOService::matches(rest);
+}
+
 NSDictionary* IOHIDGamepadDevice::matchingDictionary()
 {
 	NSMutableDictionary* dict = [NSMutableDictionary dictionaryWithDictionary: m_properties];
@@ -117,6 +293,44 @@ NSDictionary* IOHIDGamepadDevice::matchingDictionary()
 NSDictionary* IOHIDGamepadDevice::getProperties()
 {
 	return m_properties;
+}
+
+IOReturn IOHIDGamepadDevice::newUserClient(uint32_t type, IOUserClient** client)
+{
+	if (type != kIOHIDLibConnectTypeManager)
+	{
+		*client = nullptr;
+		return kIOReturnUnsupported;
+	}
+	*client = new IOHIDLibUserClient(this);
+	return kIOReturnSuccess;
+}
+
+const std::vector<uint8_t>* IOHIDGamepadDevice::hidOutputReport(uint32_t reportID) const
+{
+	return m_pad.output_kind && reportID == m_pad.output_report_id ? &m_output : nullptr;
+}
+
+IOReturn IOHIDGamepadDevice::hidSetReport(uint32_t type, uint32_t reportID, const uint8_t* data, size_t length)
+{
+	struct iokitd_rumble rumble;
+
+	if (type != kIOHIDLibReportOutput || !hidOutputReport(reportID))
+		return kIOReturnUnsupported;
+
+	int result = iokitd_gamepad_decode_output(&m_pad, data, length, &rumble);
+	if (result < 0 || length == 0)
+		return kIOReturnBadArgument;
+
+	m_output.assign(m_output.size(), 0);
+	std::copy(data, data + length, m_output.begin());
+	if (result == 0)
+		return kIOReturnSuccess;
+	if (m_fd < 0)
+		return kIOReturnNoDevice;
+	if (iokitd_gamepad_rumble(m_fd, &m_effect, &rumble) < 0)
+		return (errno == EBADF || errno == EACCES || errno == EPERM) ? kIOReturnNotPermitted : kIOReturnError;
+	return kIOReturnSuccess;
 }
 
 void IOHIDGamepadDevice::startReading(void (^onGone)(IOHIDGamepadDevice*))
@@ -131,12 +345,15 @@ void IOHIDGamepadDevice::startReading(void (^onGone)(IOHIDGamepadDevice*))
 
 	m_readSource = dispatch_source_create(DISPATCH_SOURCE_TYPE_READ, m_fd, 0, dispatch_get_main_queue());
 	dispatch_source_set_event_handler(m_readSource, ^{
+		std::vector<uint8_t> previous = m_report;
 		int result = iokitd_gamepad_read(m_fd, &m_pad, m_report.data());
 		if (result < 0)
 		{
 			dispatch_source_cancel(m_readSource);
 			onGone(this);
 		}
+		else if (result > 0)
+			hidReportChanged(previous);
 	});
 	dispatch_resume(m_readSource);
 }

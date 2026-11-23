@@ -33,6 +33,10 @@ mig(iokitmig.defs)
 set(MIG_NO_XTRACE 1)
 mig(iokitmig32.defs)
 unset(MIG_NO_XTRACE)
+# Requests that have no XNU counterpart, shared with the client library
+set(MIG_NO_XTRACE 1)
+mig(iokitdarling.defs)
+unset(MIG_NO_XTRACE)
 mig(powermanagement.defs)
 
 # x86Sim: every out-of-line reply buffer (io_registry_entry_get_properties*, ...) is a fresh vm_allocate()
@@ -79,21 +83,30 @@ set(iokitd_sources
 	src/IOPlatformExpertDevice.mm
 	src/IOServiceNotification.mm
 	src/IOHIDGamepadDevice.mm
+	src/IOHIDLibUserClient.mm
+	src/IOHIDDeviceMatching.mm
 	src/IOHIDInputDevice.mm
+	src/IOHIDDescriptorDevice.mm
+	src/HostHIDDescriptor.c
+	src/HostHIDDevice.c
 	src/HostGamepad.c
+	src/HostInputIdentity.c
+	src/IOHIDHostIdentity.mm
 	src/HostInput.c
 	src/HostInputMonitor.mm
 	src/IOHostGPU.mm
 	${CMAKE_CURRENT_BINARY_DIR}/iokitmigServerDealloc.c
 	${CMAKE_CURRENT_BINARY_DIR}/iokitmig32ServerDealloc.c
+	${CMAKE_CURRENT_BINARY_DIR}/iokitdarlingServer.c
 	src/iokitDispatch.cpp
+	src/IOAsyncCompletion.cpp
 	${CMAKE_CURRENT_BINARY_DIR}/powermanagementServer.c
 	${CMAKE_CURRENT_SOURCE_DIR}/../IOKitUser/IOCFSerialize.c
 	${CMAKE_CURRENT_SOURCE_DIR}/../IOKitUser/IOCFUnserialize.tab.c
 )
 
 add_darling_executable(iokitd ${iokitd_sources})
-target_link_libraries(iokitd cxx bsm.0 CoreFoundation Foundation X11 XRandR Xext IOSurface dbus)
+target_link_libraries(iokitd cxx bsm.0 CoreFoundation Foundation IOKit X11 XRandR Xext IOSurface dbus)
 
 install(TARGETS iokitd DESTINATION libexec/darling/usr/sbin)
 install(FILES org.darlinghq.iokitd.plist DESTINATION libexec/darling/System/Library/LaunchDaemons)
