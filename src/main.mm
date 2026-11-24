@@ -34,6 +34,7 @@
 #include "IODisplayConnectX11.h"
 #include "IODisplayConnectDRM.h"
 #include "IOHostGPU.h"
+#include "IOHostBlockStorage.h"
 #include "PowerAssertions.h"
 #include "IOSurfaceRoot.h"
 #include "IOPlatformExpertDevice.h"
@@ -150,6 +151,7 @@ static void discoverAllDevices()
 	size_t drmDisplays = IODisplayConnectDRM::discoverDevices(registry);
 	IODisplayConnectX11::discoverDevices(registry, drmDisplays == 0);
 	IOHostGPU::registerSelf(registry);
+	IOBlockStorageDriver::registerSelf(registry);
 	IOSurfaceRoot::registerSelf(registry);
 	IOPMrootDomain::registerSelf(registry);
 }

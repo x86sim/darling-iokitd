@@ -95,6 +95,7 @@ set(iokitd_sources
 	src/HostInput.c
 	src/HostInputMonitor.mm
 	src/IOHostGPU.mm
+	src/IOHostBlockStorage.mm
 	${CMAKE_CURRENT_BINARY_DIR}/iokitmigServerDealloc.c
 	${CMAKE_CURRENT_BINARY_DIR}/iokitmig32ServerDealloc.c
 	${CMAKE_CURRENT_BINARY_DIR}/iokitdarlingServer.c
