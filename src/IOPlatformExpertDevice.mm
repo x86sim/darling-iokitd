@@ -119,6 +119,17 @@ NSDictionary* IOPlatformExpertDevice::getProperties()
 	return m_properties;
 }
 
+// x86Sim: a device tree node with fixed properties (no service of its own)
+class IODeviceTreeNode : public IORegistryEntry
+{
+public:
+	IODeviceTreeNode(NSDictionary* properties) : m_properties([properties retain]) {}
+	const char* className() const override { return "IORegistryEntry"; }
+	NSDictionary* getProperties() override { return m_properties; }
+private:
+	NSDictionary* m_properties;
+};
+
 void IOPlatformExpertDevice::registerSelf(ServiceRegistry* targetServiceRegistry)
 {
 	static IOPlatformExpertDevice* device = new IOPlatformExpertDevice;
@@ -129,4 +140,20 @@ void IOPlatformExpertDevice::registerSelf(ServiceRegistry* targetServiceRegistry
 	NSData* model = device->m_properties[@"model"];
 	std::string name = model ? (const char*) [model bytes] : "IOPlatformExpertDevice";
 	device->registerInPlane(kIOServicePlane, name.c_str(), IORegistryEntry::root());
+
+	// x86Sim: the Neural Engine node of an Apple silicon Mac's device tree (IODeviceTree:/arm-io/ane), with only its
+	// "ane-type" (the M1 reference Mac's value, <40000000>). Apple's simulators run on Apple silicon Macs only, and the
+	// simulator's libMobileGestalt answers HasAppleNeuralEngine from the host's registry: ane-type > 0, searched
+	// recursively below IOPlatformExpertDevice in the IODeviceTree plane. Without it, Vision chose its Espresso person
+	// segmentation model instead of the E5RT one Apple's simulator picks, and VNGeneratePersonSegmentationRequest
+	// failed with VNErrorInternalError (9) where Apple's gives E5RT's "not supported" (1). The simulator never runs on
+	// the Neural Engine either way (its E5RT is a stub; ANE contexts fall back to MPS / CPU).
+	static IODeviceTreeNode* armIO = new IODeviceTreeNode(@{});
+	uint32_t aneType = 0x40;
+	static IODeviceTreeNode* ane = new IODeviceTreeNode(@{
+		@"ane-type": [NSData dataWithBytes: &aneType length: sizeof(aneType)],
+	});
+	device->registerInPlane(kIODeviceTreePlane, "device-tree", IORegistryEntry::root());
+	armIO->registerInPlane(kIODeviceTreePlane, "arm-io", device);
+	ane->registerInPlane(kIODeviceTreePlane, "ane", armIO);
 }
